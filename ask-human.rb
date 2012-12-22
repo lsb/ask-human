@@ -108,7 +108,10 @@ def assignments_per_hit(hit_id)
     assignment_id = a.get_elements("AssignmentId").first.text
     worker_id = a.get_elements("WorkerId").first.text
     answer_xml = REXML::Document.new(a.get_elements("Answer").first.text).root
-    assignment_values_hash = Hash[answer_xml.get_elements("Answer").map {|a| ["QuestionIdentifier", "SelectionIdentifier"].map {|i| a.get_elements(i).first.text } }]
+    assignment_values_hash = Hash[answer_xml.get_elements("Answer").map {|a|
+                                    # TODO: pay down code debt, pass in (:: hit_id -> type)
+                                    ["QuestionIdentifier", "FreeText", "SelectionIdentifier"].map {|i| a.get_elements(i).first}.compact.map(&:text)
+                                  }]
     {:id => assignment_id, :worker_id => worker_id, :assignment => assignment_values_hash}
   }
 end
@@ -141,7 +144,7 @@ end
 
 def seconds_to_read(questions, radio_text)
   words_per_second = 3.75 # = 225 wpm (brisk)
-  joined_words = questions.map {|q| [q[:text], q[:answers].map {|a| a[:text]}].join(' ') }.join(' ')
+  joined_words = questions.map {|q| [q.fetch(:text), (radio_text == :text ? "" : q.fetch(:answers).map {|a| a.fetch(:text)} ) ].join(' ') }.join(' ')
   word_count = joined_words.scan(/\w+/).size.to_f
   multiplier = (radio_text == :radio ? 1 : 5)
   (word_count / words_per_second) * multiplier
@@ -166,10 +169,10 @@ def simple_ask_questions(questions, radio_text, title, samples, shuffle=true)
   marked_qs = questions.map {|q| q.has_key?(:correct) ? mark_gs_question(q) : q }
   qids = marked_qs.map {|q| q.fetch(:id) }.sort.join
   shuffled_marked_qs = marked_qs.sort_by {|q| Digest::MD5.hexdigest(qids + q[:id])}
-  ordered_questions = shuffle ? marked_qs : shuffled_marked_qs
-  reward = hit_reward(marked_qs, radio_text)
-  duration = time_allotment(marked_qs, radio_text)
-  question_form = generate_radiotext_question_form(radio_text, title, marked_qs)
+  ordered_questions = shuffle ? shuffled_marked_qs : marked_qs
+  reward = hit_reward(questions, radio_text)
+  duration = time_allotment(questions, radio_text)
+  question_form = generate_radiotext_question_form(radio_text, title, ordered_questions)
   create_hit({ :title => title, :description => title,
                :question => question_form,
                :reward => reward,
