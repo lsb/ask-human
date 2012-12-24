@@ -160,7 +160,7 @@ def hit_reward(questions, radio_text)
   min_reward = 0.01
   reading_seconds = seconds_to_read(questions, radio_text)
   seconds_per_hour = 3600.0
-  mturk_hourly_living_wage = 4.00 # ~ v highly paid Indian HS teacher
+  mturk_hourly_living_wage = 1.00 # ~ entry level Indian HS teacher
   reward = ((reading_seconds / seconds_per_hour) * mturk_hourly_living_wage).round(2)
   [reward, min_reward].max
 end
