@@ -1,11 +1,10 @@
 require './db-asks'
 require 'sinatra'
-use ActiveRecord::ConnectionAdapters::ConnectionManagement
 
 def sanitize_params(params)
   keys = %w[instructions question type gold_standards nonce samples max_gold_standards gs_failure_rate]
   values = keys.map {|k| params[k] }
-  dtype = DataType.first(conditions: {dtype: params["type"]})
+  dtype = DB.get_first_value("select dtype from data_types where dtype = ?", params["type"])
   required_values = values[0,3] + [dtype]
   halt(412, "Error: required parameters are instructions, question, and type.") unless required_values.all?
   fill_in_putget_ask( *values ) rescue halt(400, "Error: invalid JSON.")
@@ -29,8 +28,7 @@ post('/ask', &get_ask) # because sometimes gold standards are long
 
 get('/') {
   content_type 'text/plain'
-
-  all_data_types = DataType.all.map(&:dtype).join(' or ')
+  all_data_types = DB.execute("select dtype from data_types").map {|r| r["dtype"] }.join(" or ")
   ["Hi.",
    "",
    "The endpoint for asking a question is /ask, with the parameters described below.",
