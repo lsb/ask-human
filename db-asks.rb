@@ -54,10 +54,18 @@ end
 
 def consume!()
   qt = lambda {|hit_id| DB.get_first_row("select qt.* from question_types qt join questions q on q.question_type_id = qt.id join asks a on a.question_id = q.id join shipped_asks sa on a.id = ask_id join hits h on h.id = hit_id where h.id = ?", hit_id) }
-  max_gs_failure = lambda {|hit_id| qt[hit_id]["gs_failure_rate"]/100.0 }
-  hit_id_to_samples = lambda {|hit_id| qt[hit_id]["samples"] }
+  max_gs_failure = lambda {|hit_id|
+    maybe_qt = qt[hit_id]
+    maybe_qt.nil? ? 110 : maybe_qt["gs_failure_rate"]/100.0
+  }
+  hit_id_to_samples = lambda {|hit_id|
+    maybe_qt = qt[hit_id]
+    maybe_qt.nil? ? 1 : maybe_qt["samples"]
+  }
   consume_hit = lambda {|hit_id, assignment|
-    dtype = DB.get_first_value("select dtype from data_types where id = ?", qt[hit_id]["data_type_id"])
+    maybe_qt = qt[hit_id]
+    return STDERR.puts("Warning, disregarding HIT #{hit_id}") if maybe_qt.nil?
+    dtype = DB.get_first_value("select dtype from data_types where id = ?", maybe_qt["data_type_id"])
     DB.transaction {
       mgsfr = max_gs_failure[hit_id]
       assignment.each {|a|
