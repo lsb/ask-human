@@ -43,7 +43,7 @@ def ship!(ask_ids)
   end
   batch = inquiries + gold_inquiries
   throw "too many golds" if seconds_to_read(gold_inquiries, dtype.to_sym) > 3600
-  return ship!(ask_ids.sort[0, ask_ids.size/2]) if seconds_to_read(batch, dtype.to_sym) > 3600
+  return ship!(ask_ids.sort[0, ask_ids.size/2]) if seconds_to_read(batch, dtype.to_sym) > 3600 || generate_radiotext_question_form(dtype.to_sym, qt["instructions"], batch).length >= 128*1024
   hit_id = simple_ask_questions(batch, dtype.to_sym, qt["instructions"], qt["samples"])
   DB.transaction {
     DB.execute("insert into hits (id) values (?)", hit_id)
