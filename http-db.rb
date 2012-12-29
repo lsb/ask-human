@@ -68,13 +68,13 @@ get('/') {
 ## ^-- user facing
 ## v-- maintenance
 
-post('/out') {
+post('/o') {
   batch = newest_batch()
   ship!(batch) unless batch.empty?
   ""
 }
 
-post('/in') {
+post('/i') {
   consume!()
   ""
 }
