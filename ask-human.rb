@@ -1,5 +1,5 @@
 require 'rest-client'; require 'openssl'; require 'date'; require 'base64'; require 'rexml/document'; require 'builder'
-load './turk-credentials.rb'
+require './turk-credentials'
 
 def add_signature(params)
   timestamp = DateTime.now.xmlschema
@@ -24,7 +24,7 @@ def generate_radiotext_question_form(radio_text, title, questions)
         b.QuestionIdentifier(q[:id])
         b.IsRequired("true")
         b.QuestionContent {
-          b.Text(q[:text])
+          b.Text(q[:text].tr("\u2706","")) # TODO discover the limits of the character set
         }
         b.AnswerSpecification {
           if radio_text == :radio
@@ -52,11 +52,48 @@ def generate_radiotext_question_form(radio_text, title, questions)
   }
 end
 
+def generate_answer_key(answers)
+  Builder::XmlMarkup.new.AnswerKey(:xmlns => "http://mechanicalturk.amazonaws.com/AWSMechanicalTurkDataSchemas/2005-10-01/AnswerKey.xsd") {|b|
+    answers.each {|a|
+      b.Question {
+        b.QuestionIdentifier(a.fetch(:id))
+        b.AnswerOption {
+          b.SelectionIdentifier(a.fetch(:text))
+          b.AnswerScore(a.fetch(:score, 1))
+        }
+      }
+    }
+  }
+end
+
+def create_qualification_type(name, description, retry_delay, question_form, answer_key, duration)
+  qt = turk({ "Operation" => "CreateQualificationType",
+              "Name" => name,
+              "Description" => description,
+              "QualificationTypeStatus" => "Active",
+              "RetryDelayInSeconds" => retry_delay,
+              "TestDurationInSeconds" => duration,
+              "Test" => question_form,
+              "AnswerKey" => answer_key })
+  throw qt unless REXML::Document.new(qt).root.get_elements("//IsValid").map(&:text).first == "True"
+  REXML::Document.new(qt).elements["//QualificationTypeId/text()"].to_s
+end
+
 def account_balance()
   ab = turk({"Operation" => "GetAccountBalance"})
   amount = REXML::Document.new(ab).elements['/GetAccountBalanceResponse/GetAccountBalanceResult/AvailableBalance/Amount/text()']
   throw ab if amount.nil?
   amount.to_s.to_f
+end
+
+def block_worker(worker_id, reason="Too many failed gold standards")
+  bw = turk({"Operation" => "BlockWorker", "WorkerId" => worker_id, "Reason" => reason})
+  throw bw unless REXML::Document.new(bw).root.get_elements("//IsValid").map(&:text).first == "True"
+end
+
+def bonus_worker(worker_id, assignment_id, amt, reason="Thanks for your good work.")
+  bw = turk({"Operation" => "GrantBonus", "WorkerId" => worker_id, "AssignmentId" => assignment_id, "BonusAmount.1.Amount" => amt.round(2), "BonusAmount.1.CurrencyCode" => "USD", "Reason" => reason})
+  throw bw unless REXML::Document.new(bw).root.get_elements("//IsValid").map(&:text).first == "True"
 end
 
 def create_hit(params)
@@ -65,16 +102,14 @@ def create_hit(params)
   question = params.fetch(:question)
   reward = params.fetch(:reward)
   duration = params.fetch(:duration)
-  lifetime = params.fetch(:lifetime, 86400 * 7)
-  keywords = params.fetch(:keywords, ['survey', 'sentiment analysis']).join(',')
+  lifetime = params.fetch(:lifetime, 3600 * 6)
+  keywords = params.fetch(:keywords, []).join(',')
   max_assignments = params.fetch(:samples)
   auto_approve = 60
-  us_only = params.fetch(:us_only, false)
-  adult = params.fetch(:adult, false)
-  us_requirement = {"QualificationTypeId" => "00000000000000000071", "Comparator" => "EqualTo", "LocaleValue" => "US"}
-  adult_requirement = {"QualificationTypeId" => "00000000000000000060", "Comparator" => "EqualTo", "IntegerValue" => "1", "RequiredToPreview" => "true"}
-  requirements = (us_only ? [us_requirement] : []) + (adult ? [adult_requirement] : [])
-  requirement_parameters = Hash[(0...requirements.size).map {|i| requirements[i].map {|k,v| [["QualificationRequirement",i+1,k].join('.'), v] } }.flatten]
+  requirements = params.fetch(:qualifications, []).map {|r|
+    {"QualificationTypeId" => r.fetch('id'), "Comparator" => r.fetch('comparator'), r.fetch('value_type') => r.fetch('value'), "RequiredToPreview" => r.fetch('hidden', false)}
+  }
+  requirement_parameters = (0...requirements.size).map {|i| requirements[i].map {|k,v| [["QualificationRequirement",i+1,k].join('.'), v] } }.inject([], &:+).inject({}) {|h,kv| k,v = *kv; h[k] = v; h }
 
   unique_request_token = OpenSSL::Digest.hexdigest("md5", params.map(&:join).sort.join)
 
@@ -93,7 +128,7 @@ def create_hit(params)
            }.merge(requirement_parameters))
 
   hit_id = REXML::Document.new(h).elements['/CreateHITResponse/HIT/HITId/text()']
-  throw "#{h}\n#{params.inspect}" if hit_id.nil?
+  throw "#{h.inspect}\n#{params.inspect}" if hit_id.nil?
   hit_id.to_s
 end
 
@@ -147,7 +182,8 @@ def seconds_to_read(questions, radio_text)
   joined_words = questions.map {|q| [q.fetch(:text), (radio_text == :text ? "" : q.fetch(:answers).map {|a| a.fetch(:text)} ) ].join(' ') }.join(' ')
   word_count = joined_words.scan(/\w+/).size.to_f
   multiplier = (radio_text == :radio ? 1 : 5)
-  (word_count / words_per_second) * multiplier
+  phone_count = joined_words.count("\u2706") # each unicode phone symbol signifies adding one minute
+  (word_count / words_per_second + phone_count * 60) * multiplier
 end
 
 def time_allotment(questions, radio_text)
@@ -160,12 +196,12 @@ def hit_reward(questions, radio_text)
   min_reward = 0.01
   reading_seconds = seconds_to_read(questions, radio_text)
   seconds_per_hour = 3600.0
-  mturk_hourly_living_wage = 0.55 # just for funsies
+  mturk_hourly_living_wage = 4.00 # high pay = quick results
   reward = ((reading_seconds / seconds_per_hour) * mturk_hourly_living_wage).round(2)
   [reward, min_reward].max
 end
 
-def simple_ask_questions(questions, radio_text, title, samples, shuffle=true)
+def simple_ask_questions(questions, radio_text, title, samples, qualifications=[], shuffle=true)
   marked_qs = questions.map {|q| q.has_key?(:correct) ? mark_gs_question(q) : q }
   qids = marked_qs.map {|q| q.fetch(:id) }.sort.join
   shuffled_marked_qs = marked_qs.sort_by {|q| Digest::MD5.hexdigest(qids + q[:id])}
@@ -177,6 +213,7 @@ def simple_ask_questions(questions, radio_text, title, samples, shuffle=true)
                :question => question_form,
                :reward => reward,
                :duration => duration,
+               :qualifications => qualifications,
                :samples => samples })
 end
 

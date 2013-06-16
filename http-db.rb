@@ -2,12 +2,12 @@ require './db-asks'
 require 'sinatra'
 
 def sanitize_params(params)
-  keys = %w[instructions question type gold_standards nonce samples max_gold_standards gs_failure_rate]
+  keys = %w[instructions question type gold_standards nonce samples max_gold_standards gs_failure_rate qualifications]
   values = keys.map {|k| params[k] }
   dtype = DB.get_first_value("select dtype from data_types where dtype = ?", params["type"])
   required_values = values[0,3] + [dtype]
   halt(412, "Error: required parameters are instructions, question, and type.") unless required_values.all?
-  fill_in_putget_ask( *values ) rescue halt(400, "Error: invalid JSON.")
+  fill_in_putget_ask( *values ) #rescue halt(400, "Error: invalid JSON.")
 end
 
 put('/ask') {
@@ -44,6 +44,7 @@ get('/') {
    " samples (maximum number of different workers to ask the question, default 1)",
    " max_gold_standards (maximum number of gold standards in a batch, default the lesser of 3 and the number of questions in gold_standards)",
    " gs_failure_rate (the percentage of gold standard question that need to fail above which the answer is discarded, default 50)",
+   " qualifications (skill sets / background; currently 'english' for reading and writing competence, or 'usphone' for making calls in the United States, default none)",
    "",
    "Question format for radio: [question, answer1, answer2...]",
    "Gold standard question format for radio: [question, correct_answer, answer2...]",
@@ -76,5 +77,10 @@ post('/o') {
 
 post('/i') {
   consume!()
+  ""
+}
+
+post('/b') {
+  block!()
   ""
 }
